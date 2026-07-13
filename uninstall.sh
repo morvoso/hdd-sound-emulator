@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=========================================================="
-echo "  🗑️  Uninstalling Retro 90s HDD Sound Emulator for Linux "
+echo "  Uninstalling Retro 90s HDD Sound Emulator for Linux "
 echo "=========================================================="
 echo ""
 
@@ -36,7 +36,7 @@ rm -f /tmp/retro_hdd_clicker.log "$SCRIPT_DIR/retro_hdd_clicker.pid"
 
 echo ""
 echo "=========================================================="
-echo " ✔ Uninstallation Complete! All system entries removed."
+echo " Uninstallation Complete. All system entries removed."
 echo " Note: The repository files in $SCRIPT_DIR remain intact."
 echo " To completely delete the repository, you can run:"
 echo "    rm -rf \"$SCRIPT_DIR\""

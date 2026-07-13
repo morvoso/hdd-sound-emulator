@@ -20,7 +20,7 @@ HDD_SOUNDS_DIR = os.path.join(BASE_DIR, "hdd-sounds")
 ICONS_DIR = os.path.join(BASE_DIR, "icons")
 
 class BlockDeviceMonitor(QObject):
-    activity_detected = pyqtSignal(str, int) # sound_type ("single", "double", "crunch" or "any"), delta_magnitude
+    activity_detected = pyqtSignal(str, int)
 
     def __init__(self, monitored_drives, poll_interval_ms=45):
         super().__init__()
@@ -100,12 +100,12 @@ class BlockDeviceMonitor(QObject):
 
 class AudioController:
     def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt"):
-        self.profiles = profiles_dict # key -> {name, path, category, wavs}
+        self.profiles = profiles_dict
         self.profile = initial_profile
         self.volume = volume
-        self.engine = engine # "qt" or "paplay"
-        self.loaded_pools = {} # wav_path -> list of QSoundEffect instances
-        self.current_wav_list = [] # list of wav file paths for current profile
+        self.engine = engine
+        self.loaded_pools = {}
+        self.current_wav_list = []
         self.load_profile(initial_profile)
 
     def load_profile(self, profile_key):
@@ -119,10 +119,9 @@ class AudioController:
         wav_files = self.profiles[profile_key]["wavs"]
         self.current_wav_list = wav_files
         
-        # Preload QSoundEffect pools for quick playback
         for wav_path in wav_files:
             pool = []
-            for _ in range(2): # 2 instances per wav file to allow overlapping
+            for _ in range(2):
                 fx = QSoundEffect()
                 fx.setSource(QUrl.fromLocalFile(wav_path))
                 fx.setVolume(self.volume)
@@ -139,7 +138,6 @@ class AudioController:
         target_wav = None
         
         if self.profile == "random_drive":
-            # Pick a random profile from all discovered profiles
             all_keys = [k for k in self.profiles.keys() if self.profiles[k]["wavs"]]
             if not all_keys:
                 return
@@ -152,13 +150,11 @@ class AudioController:
             if not self.current_wav_list:
                 return
             
-            # If the profile specifically has "single.wav", "double.wav", "crunch.wav" matching intensity, try using that
             if sound_type in ["single", "double", "crunch"]:
                 matching = [w for w in self.current_wav_list if os.path.splitext(os.path.basename(w))[0].lower() == sound_type]
                 if matching:
                     target_wav = matching[0]
             
-            # Otherwise, randomly select one of the WAV files inside this profile's folder!
             if not target_wav:
                 target_wav = random.choice(self.current_wav_list)
 
@@ -171,15 +167,12 @@ class AudioController:
             except Exception:
                 pass
         else:
-            # QtMultimedia playback
             pool = self.loaded_pools.get(target_wav)
             if not pool:
-                # If playing on the fly (e.g. random_drive mode or dynamic selection)
                 fx = QSoundEffect()
                 fx.setSource(QUrl.fromLocalFile(target_wav))
                 fx.setVolume(self.volume)
                 fx.play()
-                # Store temporarily so it doesn't get garbage collected instantly
                 self.loaded_pools[target_wav] = [fx]
                 return
 
@@ -239,12 +232,12 @@ class SettingsDialog(QDialog):
         self.combo_category = QComboBox()
         self.combo_category.addItems([
             "All Categories & Eras",
-            "⚡ Built-in Synthesized Profiles",
-            "💾 1980s Hard Drives",
-            "💾 1990s Hard Drives",
-            "💾 2000s+ Hard Drives",
-            "💾 Floppy Drives & CD-ROM",
-            "💾 Other Classic & Custom Drives"
+            "Built-in Synthesized Profiles",
+            "1980s Hard Drives",
+            "1990s Hard Drives",
+            "2000s+ Hard Drives",
+            "Floppy Drives & CD-ROM",
+            "Other Classic & Custom Drives"
         ])
         self.combo_category.currentIndexChanged.connect(self.populate_list)
         filter_layout.addWidget(self.combo_category, 1)
@@ -258,11 +251,11 @@ class SettingsDialog(QDialog):
         
         # Buttons under profile list
         btn_layout = QHBoxLayout()
-        self.btn_preview = QPushButton("🎧 Preview Random Sound from Folder")
+        self.btn_preview = QPushButton("Preview Random Sound from Folder")
         self.btn_preview.clicked.connect(self.preview_selected_profile)
         self.btn_preview.setEnabled(False)
         
-        self.btn_apply = QPushButton("✔ Apply Selected Profile")
+        self.btn_apply = QPushButton("Apply Selected Profile")
         self.btn_apply.setStyleSheet("font-weight: bold; padding: 5px;")
         self.btn_apply.clicked.connect(self.apply_selected_profile)
         self.btn_apply.setEnabled(False)
@@ -316,9 +309,8 @@ class SettingsDialog(QDialog):
         }
         target_cat = cat_map.get(filter_idx)
         
-        # Add Special Random option first if viewing all
         if filter_idx == 0:
-            item_rand = QListWidgetItem("🎲 [ Special ] Random Drive / Folder on Every Click")
+            item_rand = QListWidgetItem("[ Special ] Random Drive / Folder on Every Click")
             item_rand.setData(Qt.ItemDataRole.UserRole, "random_drive")
             if self.audio_ctrl.profile == "random_drive":
                 item_rand.setFont(self._bold_font())
@@ -330,7 +322,7 @@ class SettingsDialog(QDialog):
             num_wavs = len(data["wavs"])
             display_text = f"{data['name']}  ({num_wavs} WAV files)"
             if key == self.audio_ctrl.profile:
-                display_text = "★ " + display_text + "  [ ACTIVE ]"
+                display_text = "* " + display_text + "  [ ACTIVE ]"
             item = QListWidgetItem(display_text)
             item.setData(Qt.ItemDataRole.UserRole, key)
             if key == self.audio_ctrl.profile:
@@ -363,7 +355,6 @@ class SettingsDialog(QDialog):
         data = self.profiles.get(key)
         if not data or not data["wavs"]:
             return
-        # Randomly select one of the WAV files in this folder to audition
         sample_wav = random.choice(data["wavs"])
         try:
             subprocess.Popen(["paplay", sample_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -407,10 +398,7 @@ class RetroHDDClickerApp(QApplication):
         super().__init__(sys_argv)
         self.setQuitOnLastWindowClosed(False)
         
-        # Discover all sound profiles across sounds/ and hdd-sounds/
         self.profiles = self.discover_all_profiles()
-        
-        # Discover block devices
         self.available_drives = self.discover_drives()
         monitored = [d for d in self.available_drives if not d.startswith(("loop", "ram", "zram"))]
         if not monitored:
@@ -418,16 +406,13 @@ class RetroHDDClickerApp(QApplication):
             
         self.monitor = BlockDeviceMonitor(monitored, poll_interval_ms=45)
         
-        # Default to Western Digital Caviar if available, or first profile
         initial_prof = "built_in:caviar" if "built_in:caviar" in self.profiles else list(self.profiles.keys())[0]
         self.audio_ctrl = AudioController(self.profiles, initial_profile=initial_prof, volume=0.8, engine="qt")
         
-        # Load tray icons
         self.icon_idle = QIcon(os.path.join(ICONS_DIR, "icon_idle.png"))
         self.icon_active = QIcon(os.path.join(ICONS_DIR, "icon_active.png"))
         self.icon_disabled = QIcon(os.path.join(ICONS_DIR, "icon_disabled.png"))
         
-        # Setup System Tray
         self.tray_icon = QSystemTrayIcon(self.icon_idle, self)
         self.tray_icon.setToolTip("Retro 90s HDD Clicker (Active)")
         
@@ -446,7 +431,6 @@ class RetroHDDClickerApp(QApplication):
     def discover_all_profiles(self):
         profiles = {}
         
-        # 1. Built-in synthesized sounds in /sounds
         if os.path.exists(SOUNDS_DIR):
             for item in sorted(os.listdir(SOUNDS_DIR)):
                 p_dir = os.path.join(SOUNDS_DIR, item)
@@ -461,38 +445,31 @@ class RetroHDDClickerApp(QApplication):
                         }
                         display = names_map.get(item.lower(), f"Synthesized: {item.capitalize()}")
                         profiles[f"built_in:{item}"] = {
-                            "name": f"⚡ {display}",
+                            "name": display,
                             "path": p_dir,
                             "category": "built_in",
                             "wavs": wavs
                         }
                         
-        # 2. External hdd-sounds folder
         if os.path.exists(HDD_SOUNDS_DIR):
             for item in sorted(os.listdir(HDD_SOUNDS_DIR)):
                 p_dir = os.path.join(HDD_SOUNDS_DIR, item)
                 if os.path.isdir(p_dir):
                     wavs = [os.path.join(p_dir, f) for f in sorted(os.listdir(p_dir)) if f.lower().endswith(".wav")]
                     if wavs:
-                        # Determine category
                         if item.startswith("198") or item.lower().startswith("random 80"):
                             cat = "1980s"
-                            cat_icon = "💾"
                         elif item.startswith("199"):
                             cat = "1990s"
-                            cat_icon = "💾"
                         elif item.startswith(("200", "201", "202")):
                             cat = "2000s"
-                            cat_icon = "💾"
                         elif "floppy" in item.lower() or "cd-rom" in item.lower():
                             cat = "floppy"
-                            cat_icon = "🖨️"
                         else:
                             cat = "classic"
-                            cat_icon = "💽"
                             
                         profiles[f"hdd:{item}"] = {
-                            "name": f"{cat_icon} {item}",
+                            "name": item,
                             "path": p_dir,
                             "category": cat,
                             "wavs": wavs
@@ -511,40 +488,35 @@ class RetroHDDClickerApp(QApplication):
     def setup_menu(self):
         self.menu = QMenu()
         
-        # Enable/Disable toggle
         self.act_enable = QAction("Enable HDD Click Sound", self.menu, checkable=True)
         self.act_enable.setChecked(True)
         self.act_enable.triggered.connect(self.toggle_enable)
         self.menu.addAction(self.act_enable)
         self.menu.addSeparator()
         
-        # Sound Profiles Categorized Menu
         self.profile_menu = self.menu.addMenu("Sound Profiles & Libraries")
         
-        # Open Dashboard action at top of profile menu
-        act_open_sel = QAction("🔍 Open Sound Profile Selector & Dashboard...", self.profile_menu)
+        act_open_sel = QAction("Open Sound Profile Selector & Dashboard...", self.profile_menu)
         act_open_sel.triggered.connect(self.show_settings)
         self.profile_menu.addAction(act_open_sel)
         self.profile_menu.addSeparator()
         
         self.profile_group = QActionGroup(self)
         
-        # Random option
-        act_rand = QAction("🎲 Random Drive / Folder on Every Click", self.profile_menu, checkable=True)
+        act_rand = QAction("Random Drive / Folder on Every Click", self.profile_menu, checkable=True)
         act_rand.setChecked(self.audio_ctrl.profile == "random_drive")
         act_rand.triggered.connect(lambda: self.on_profile_selected("random_drive"))
         self.profile_group.addAction(act_rand)
         self.profile_menu.addAction(act_rand)
         self.profile_menu.addSeparator()
         
-        # Submenus for categories
         cats = [
-            ("built_in", "⚡ Built-in Synthesized Profiles"),
-            ("1980s", "💾 1980s Hard Drives"),
-            ("1990s", "💾 1990s Hard Drives"),
-            ("2000s", "💾 2000s+ Hard Drives"),
-            ("floppy", "🖨️ Floppy Drives & CD-ROM"),
-            ("classic", "💽 Other Classic & Custom Drives")
+            ("built_in", "Built-in Synthesized Profiles"),
+            ("1980s", "1980s Hard Drives"),
+            ("1990s", "1990s Hard Drives"),
+            ("2000s", "2000s+ Hard Drives"),
+            ("floppy", "Floppy Drives & CD-ROM"),
+            ("classic", "Other Classic & Custom Drives")
         ]
         
         self.profile_actions = {}
@@ -562,11 +534,9 @@ class RetroHDDClickerApp(QApplication):
                 subm.addAction(act)
                 self.profile_actions[key] = act
             
-        # Monitored Drives Submenu
         self.drives_menu = self.menu.addMenu("Monitored Drives")
         self.update_drives_menu()
         
-        # Volume Submenu
         self.vol_menu = self.menu.addMenu("Volume")
         vol_group = QActionGroup(self)
         for vol_pct in [25, 50, 75, 100]:
@@ -577,7 +547,6 @@ class RetroHDDClickerApp(QApplication):
             vol_group.addAction(act)
             self.vol_menu.addAction(act)
             
-        # Sensitivity / Polling Submenu
         self.sens_menu = self.menu.addMenu("Sensitivity (Polling Rate)")
         sens_group = QActionGroup(self)
         sens_options = [
@@ -593,7 +562,6 @@ class RetroHDDClickerApp(QApplication):
             sens_group.addAction(act)
             self.sens_menu.addAction(act)
             
-        # Audio Engine Submenu
         self.engine_menu = self.menu.addMenu("Audio Backend")
         eng_group = QActionGroup(self)
         eng_qt = QAction("PyQt6 QtMultimedia (Multi-Voice Pool)", self.engine_menu, checkable=True)
@@ -611,19 +579,16 @@ class RetroHDDClickerApp(QApplication):
         
         self.menu.addSeparator()
         
-        # Test Click
         act_test = QAction("Simulate Test Click", self.menu)
         act_test.triggered.connect(lambda: self.audio_ctrl.play("crunch"))
         self.menu.addAction(act_test)
         
-        # Settings Dashboard
         act_stats = QAction("Sound Selector & Settings Dashboard...", self.menu)
         act_stats.triggered.connect(self.show_settings)
         self.menu.addAction(act_stats)
         
         self.menu.addSeparator()
         
-        # Quit
         act_quit = QAction("Quit Retro HDD Clicker", self.menu)
         act_quit.triggered.connect(self.quit)
         self.menu.addAction(act_quit)
@@ -632,7 +597,6 @@ class RetroHDDClickerApp(QApplication):
 
     def on_profile_selected(self, profile_key):
         self.audio_ctrl.load_profile(profile_key)
-        # Update check marks in menu
         if profile_key in self.profile_actions:
             self.profile_actions[profile_key].setChecked(True)
         if self.settings_dlg and self.settings_dlg.isVisible():
