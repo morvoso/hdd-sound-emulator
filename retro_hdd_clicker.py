@@ -458,6 +458,7 @@ class RetroHDDClickerApp(QApplication):
         
         self.monitor.start_monitoring()
         self.settings_dlg = None
+        self.save_config()
 
     def load_config(self):
         try:
