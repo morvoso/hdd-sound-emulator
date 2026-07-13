@@ -184,7 +184,7 @@ class AudioController:
         self.loop_fx.stop()
         self.loop_fx.setSource(QUrl.fromLocalFile(loop_wav))
         self.loop_fx.setVolume(self.volume * 0.6)
-        self.loop_fx.setLoopCount(QSoundEffect.Loop.Infinite)
+        self.loop_fx.setLoopCount(-2) # Qt QSoundEffect.Infinite constant (-2)
         self.loop_fx.play()
 
     def play(self, sound_type="any"):
