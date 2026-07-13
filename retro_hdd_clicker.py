@@ -102,16 +102,19 @@ class BlockDeviceMonitor(QObject):
 
 
 class AudioController:
-    def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt", min_gap_ms=125, on_change_cb=None):
+    def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt", min_gap_ms=-1, loop_enabled=False, on_change_cb=None):
         self.profiles = profiles_dict
         self.profile = initial_profile
         self.volume = volume
         self.engine = engine
         self.min_gap_ms = min_gap_ms
+        self.loop_enabled = loop_enabled
+        self.active = True
         self.last_play_time = 0.0
         self.on_change_cb = on_change_cb
         self.loaded_pools = {}
         self.current_wav_list = []
+        self.loop_fx = QSoundEffect()
         self.load_profile(initial_profile)
 
     def load_profile(self, profile_key):
@@ -131,6 +134,7 @@ class AudioController:
                     pool.append(fx)
                 self.loaded_pools[wav_path] = pool
                 
+        self.update_loop_playback()
         if self.on_change_cb:
             self.on_change_cb()
 
@@ -139,6 +143,8 @@ class AudioController:
         for wav_path, pool in self.loaded_pools.items():
             for fx in pool:
                 fx.setVolume(self.volume)
+        if hasattr(self, 'loop_fx') and self.loop_fx.isPlaying():
+            self.loop_fx.setVolume(self.volume * 0.6)
         if self.on_change_cb:
             self.on_change_cb()
 
@@ -151,6 +157,35 @@ class AudioController:
         self.min_gap_ms = int(gap_ms)
         if self.on_change_cb:
             self.on_change_cb()
+
+    def set_loop_enabled(self, enabled):
+        self.loop_enabled = bool(enabled)
+        self.update_loop_playback()
+        if self.on_change_cb:
+            self.on_change_cb()
+
+    def update_loop_playback(self):
+        if not hasattr(self, 'loop_fx'):
+            self.loop_fx = QSoundEffect()
+            
+        if not self.active or not self.loop_enabled or self.profile == "random_drive" or self.profile not in self.profiles:
+            self.loop_fx.stop()
+            return
+            
+        loop_wav = self.profiles[self.profile].get("loop_wav")
+        if not loop_wav or not os.path.exists(loop_wav):
+            self.loop_fx.stop()
+            return
+            
+        if self.loop_fx.isPlaying() and self.loop_fx.source().toLocalFile() == loop_wav:
+            self.loop_fx.setVolume(self.volume * 0.6)
+            return
+            
+        self.loop_fx.stop()
+        self.loop_fx.setSource(QUrl.fromLocalFile(loop_wav))
+        self.loop_fx.setVolume(self.volume * 0.6)
+        self.loop_fx.setLoopCount(QSoundEffect.Loop.Infinite)
+        self.loop_fx.play()
 
     def play(self, sound_type="any"):
         if self.min_gap_ms < 0:
@@ -329,6 +364,13 @@ class SettingsDialog(QDialog):
         row2.addWidget(self.combo_gap, 1)
         ctrl_layout.addLayout(row2)
         
+        row3 = QHBoxLayout()
+        self.chk_loop = QCheckBox("Play Continuous Background Platter Spinning Hum (looping.wav)")
+        self.chk_loop.setChecked(self.audio_ctrl.loop_enabled)
+        self.chk_loop.toggled.connect(self.on_loop_toggled)
+        row3.addWidget(self.chk_loop)
+        ctrl_layout.addLayout(row3)
+        
         main_layout.addWidget(ctrl_box)
         
         # Close Button
@@ -432,6 +474,9 @@ class SettingsDialog(QDialog):
         if 0 <= idx < len(gaps):
             self.audio_ctrl.set_min_gap(gaps[idx])
 
+    def on_loop_toggled(self, checked):
+        self.audio_ctrl.set_loop_enabled(checked)
+
     def update_stats(self):
         self.lbl_clicks.setText(f"Total Clicks Triggered: {self.monitor.total_clicks:,}")
         mb_read = (self.monitor.total_sectors_read * 512) / (1024 * 1024)
@@ -468,6 +513,7 @@ class RetroHDDClickerApp(QApplication):
         vol = self.config.get("volume", 0.8)
         eng = self.config.get("engine", "qt")
         gap = self.config.get("min_gap_ms", -1)
+        loop_en = self.config.get("loop_enabled", False)
         
         self.audio_ctrl = AudioController(
             self.profiles,
@@ -475,8 +521,11 @@ class RetroHDDClickerApp(QApplication):
             volume=vol,
             engine=eng,
             min_gap_ms=gap,
+            loop_enabled=loop_en,
             on_change_cb=self.save_config
         )
+        self.audio_ctrl.active = self.monitor.enabled
+        self.audio_ctrl.update_loop_playback()
         
         self.icon_idle = QIcon(os.path.join(ICONS_DIR, "icon_idle.png"))
         self.icon_active = QIcon(os.path.join(ICONS_DIR, "icon_active.png"))
@@ -515,6 +564,7 @@ class RetroHDDClickerApp(QApplication):
                 "volume": self.audio_ctrl.volume,
                 "engine": self.audio_ctrl.engine,
                 "min_gap_ms": self.audio_ctrl.min_gap_ms,
+                "loop_enabled": self.audio_ctrl.loop_enabled,
                 "poll_interval_ms": self.monitor.poll_interval_ms,
                 "enabled": self.monitor.enabled,
                 "monitored_drives": list(self.monitor.monitored_drives)
@@ -534,6 +584,8 @@ class RetroHDDClickerApp(QApplication):
                     wavs = [w for w in all_wavs if not any(k in os.path.basename(w).lower() for k in ["loop", "idle", "ambience", "spin", "motor"])]
                     if not wavs:
                         wavs = all_wavs
+                    loop_candidates = [w for w in all_wavs if any(k in os.path.basename(w).lower() for k in ["loop", "idle", "ambience", "spin", "motor"])]
+                    loop_wav = loop_candidates[0] if loop_candidates else None
                     if wavs:
                         names_map = {
                             "caviar": "Western Digital Caviar (1995)",
@@ -546,7 +598,8 @@ class RetroHDDClickerApp(QApplication):
                             "name": display,
                             "path": p_dir,
                             "category": "built_in",
-                            "wavs": wavs
+                            "wavs": wavs,
+                            "loop_wav": loop_wav
                         }
                         
         if os.path.exists(HDD_SOUNDS_DIR):
@@ -557,6 +610,8 @@ class RetroHDDClickerApp(QApplication):
                     wavs = [w for w in all_wavs if not any(k in os.path.basename(w).lower() for k in ["loop", "idle", "ambience", "spin", "motor"])]
                     if not wavs:
                         wavs = all_wavs
+                    loop_candidates = [w for w in all_wavs if any(k in os.path.basename(w).lower() for k in ["loop", "idle", "ambience", "spin", "motor"])]
+                    loop_wav = loop_candidates[0] if loop_candidates else None
                     if wavs:
                         if item.startswith("198") or item.lower().startswith("random 80"):
                             cat = "1980s"
@@ -573,7 +628,8 @@ class RetroHDDClickerApp(QApplication):
                             "name": item,
                             "path": p_dir,
                             "category": cat,
-                            "wavs": wavs
+                            "wavs": wavs,
+                            "loop_wav": loop_wav
                         }
         return profiles
 
@@ -593,6 +649,11 @@ class RetroHDDClickerApp(QApplication):
         self.act_enable.setChecked(self.monitor.enabled)
         self.act_enable.triggered.connect(self.toggle_enable)
         self.menu.addAction(self.act_enable)
+        
+        self.act_loop = QAction("Enable Background Platter Hum (looping.wav)", self.menu, checkable=True)
+        self.act_loop.setChecked(self.audio_ctrl.loop_enabled)
+        self.act_loop.triggered.connect(self.toggle_loop_enabled)
+        self.menu.addAction(self.act_loop)
         self.menu.addSeparator()
         
         self.profile_menu = self.menu.addMenu("Sound Profiles & Libraries")
@@ -755,12 +816,22 @@ class RetroHDDClickerApp(QApplication):
 
     def toggle_enable(self, checked):
         self.monitor.enabled = checked
+        self.audio_ctrl.active = checked
         if checked:
             self.tray_icon.setIcon(self.icon_idle)
             self.tray_icon.setToolTip("Retro 90s HDD Clicker (Active)")
+            self.audio_ctrl.update_loop_playback()
         else:
             self.tray_icon.setIcon(self.icon_disabled)
             self.tray_icon.setToolTip("Retro 90s HDD Clicker (Disabled)")
+            if hasattr(self.audio_ctrl, 'loop_fx'):
+                self.audio_ctrl.loop_fx.stop()
+        self.save_config()
+
+    def toggle_loop_enabled(self, checked):
+        self.audio_ctrl.set_loop_enabled(checked)
+        if self.settings_dlg and self.settings_dlg.isVisible() and hasattr(self.settings_dlg, 'chk_loop'):
+            self.settings_dlg.chk_loop.setChecked(checked)
         self.save_config()
 
     def on_activity(self, sound_type, delta_magnitude):

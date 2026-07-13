@@ -17,8 +17,11 @@ A background utility and system tray application for Linux that plays mechanical
 - **Exclusive / Clean Playback & Click Rate Limiting**:
   - **Exclusive Playback Mode (Default)**: Plays authentic 3-to-6-second seek sequences cleanly to completion without overlapping, echoing, or mid-way stutter restarts.
   - **Configurable Throttling**: Optional cooldown gaps available from the dashboard or tray menu (Exclusive -1ms default, Authentic Mechanical 125ms, High Rate 65ms, Relaxed 250ms, or Uncapped 0ms).
+- **Optional Continuous Background Platter Hum (`looping.wav`)**:
+  - Toggle **Enable Background Platter Hum** directly from the system tray menu or sound dashboard to play the continuous, quiet motor rotation hum of your selected drive profile in the background (`whirrrrrr`).
+  - When switching drive profiles (or when toggling the emulator on/off), the background hum automatically switches to match the active drive model's acoustic loop or shuts down cleanly.
 - **System Tray Menu & Dashboard**:
-  - **Submenus**: Right-click the system tray icon to select sound profiles sorted by era (1980s, 1990s, 2000s+, Floppy Drives & CD-ROM).
+  - **Submenus**: Right-click the system tray icon to select sound profiles sorted by era (1980s, 1990s, 2000s+, Floppy Drives & CD-ROM) and toggle background platter hum.
   - **Sound Dashboard**: Double-click the tray icon to open the settings dialog to filter profiles, preview audio samples, adjust volume, change the polling rate, and set click rate limits.
   - **Activity Indicator**: The system tray icon shows a red LED indicator during disk activity.
 
