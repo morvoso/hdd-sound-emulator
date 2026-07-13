@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.env
+
+# Runtime / Logs / PIDs
+*.log
+*.pid
+retro_hdd_clicker.pid
+/tmp/*
