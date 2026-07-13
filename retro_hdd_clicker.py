@@ -2,6 +2,7 @@
 import sys
 import os
 import time
+import json
 import random
 import subprocess
 from PyQt6.QtCore import Qt, QUrl, QTimer, pyqtSignal, QObject
@@ -18,6 +19,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SOUNDS_DIR = os.path.join(BASE_DIR, "sounds")
 HDD_SOUNDS_DIR = os.path.join(BASE_DIR, "hdd-sounds")
 ICONS_DIR = os.path.join(BASE_DIR, "icons")
+CONFIG_DIR = os.path.expanduser("~/.config/retro-hdd-clicker")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 class BlockDeviceMonitor(QObject):
     activity_detected = pyqtSignal(str, int)
@@ -99,11 +102,12 @@ class BlockDeviceMonitor(QObject):
 
 
 class AudioController:
-    def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt"):
+    def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt", on_change_cb=None):
         self.profiles = profiles_dict
         self.profile = initial_profile
         self.volume = volume
         self.engine = engine
+        self.on_change_cb = on_change_cb
         self.loaded_pools = {}
         self.current_wav_list = []
         self.load_profile(initial_profile)
@@ -113,26 +117,33 @@ class AudioController:
         self.loaded_pools.clear()
         self.current_wav_list.clear()
         
-        if profile_key == "random_drive" or profile_key not in self.profiles:
-            return
-            
-        wav_files = self.profiles[profile_key]["wavs"]
-        self.current_wav_list = wav_files
-        
-        for wav_path in wav_files:
-            pool = []
-            for _ in range(2):
-                fx = QSoundEffect()
-                fx.setSource(QUrl.fromLocalFile(wav_path))
-                fx.setVolume(self.volume)
-                pool.append(fx)
-            self.loaded_pools[wav_path] = pool
+        if profile_key != "random_drive" and profile_key in self.profiles:
+            wav_files = self.profiles[profile_key]["wavs"]
+            self.current_wav_list = wav_files
+            for wav_path in wav_files:
+                pool = []
+                for _ in range(2):
+                    fx = QSoundEffect()
+                    fx.setSource(QUrl.fromLocalFile(wav_path))
+                    fx.setVolume(self.volume)
+                    pool.append(fx)
+                self.loaded_pools[wav_path] = pool
+                
+        if self.on_change_cb:
+            self.on_change_cb()
 
     def set_volume(self, volume):
         self.volume = max(0.0, min(1.0, volume))
         for wav_path, pool in self.loaded_pools.items():
             for fx in pool:
                 fx.setVolume(self.volume)
+        if self.on_change_cb:
+            self.on_change_cb()
+
+    def set_engine(self, engine_name):
+        self.engine = engine_name
+        if self.on_change_cb:
+            self.on_change_cb()
 
     def play(self, sound_type="any"):
         target_wav = None
@@ -383,7 +394,7 @@ class SettingsDialog(QDialog):
         self.audio_ctrl.set_volume(val / 100.0)
 
     def on_engine_changed(self, idx):
-        self.audio_ctrl.engine = "qt" if idx == 0 else "paplay"
+        self.audio_ctrl.set_engine("qt" if idx == 0 else "paplay")
 
     def update_stats(self):
         self.lbl_clicks.setText(f"Total Clicks Triggered: {self.monitor.total_clicks:,}")
@@ -400,21 +411,41 @@ class RetroHDDClickerApp(QApplication):
         
         self.profiles = self.discover_all_profiles()
         self.available_drives = self.discover_drives()
-        monitored = [d for d in self.available_drives if not d.startswith(("loop", "ram", "zram"))]
-        if not monitored:
-            monitored = self.available_drives
-            
-        self.monitor = BlockDeviceMonitor(monitored, poll_interval_ms=45)
         
-        initial_prof = "built_in:caviar" if "built_in:caviar" in self.profiles else list(self.profiles.keys())[0]
-        self.audio_ctrl = AudioController(self.profiles, initial_profile=initial_prof, volume=0.8, engine="qt")
+        # Load user configuration
+        self.config = self.load_config()
+        
+        monitored = self.config.get("monitored_drives")
+        if not monitored:
+            monitored = [d for d in self.available_drives if not d.startswith(("loop", "ram", "zram"))]
+            if not monitored:
+                monitored = self.available_drives
+                
+        poll_ms = self.config.get("poll_interval_ms", 45)
+        self.monitor = BlockDeviceMonitor(monitored, poll_interval_ms=poll_ms)
+        self.monitor.enabled = self.config.get("enabled", True)
+        
+        initial_prof = self.config.get("profile")
+        if not initial_prof or (initial_prof != "random_drive" and initial_prof not in self.profiles):
+            initial_prof = "built_in:caviar" if "built_in:caviar" in self.profiles else list(self.profiles.keys())[0]
+            
+        vol = self.config.get("volume", 0.8)
+        eng = self.config.get("engine", "qt")
+        
+        self.audio_ctrl = AudioController(
+            self.profiles,
+            initial_profile=initial_prof,
+            volume=vol,
+            engine=eng,
+            on_change_cb=self.save_config
+        )
         
         self.icon_idle = QIcon(os.path.join(ICONS_DIR, "icon_idle.png"))
         self.icon_active = QIcon(os.path.join(ICONS_DIR, "icon_active.png"))
         self.icon_disabled = QIcon(os.path.join(ICONS_DIR, "icon_disabled.png"))
         
-        self.tray_icon = QSystemTrayIcon(self.icon_idle, self)
-        self.tray_icon.setToolTip("Retro 90s HDD Clicker (Active)")
+        self.tray_icon = QSystemTrayIcon(self.icon_idle if self.monitor.enabled else self.icon_disabled, self)
+        self.tray_icon.setToolTip("Retro 90s HDD Clicker (" + ("Active)" if self.monitor.enabled else "Disabled)"))
         
         self.setup_menu()
         self.tray_icon.activated.connect(self.on_tray_activated)
@@ -428,9 +459,33 @@ class RetroHDDClickerApp(QApplication):
         self.monitor.start_monitoring()
         self.settings_dlg = None
 
+    def load_config(self):
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def save_config(self):
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            data = {
+                "profile": self.audio_ctrl.profile,
+                "volume": self.audio_ctrl.volume,
+                "engine": self.audio_ctrl.engine,
+                "poll_interval_ms": self.monitor.poll_interval_ms,
+                "enabled": self.monitor.enabled,
+                "monitored_drives": list(self.monitor.monitored_drives)
+            }
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
     def discover_all_profiles(self):
         profiles = {}
-        
         if os.path.exists(SOUNDS_DIR):
             for item in sorted(os.listdir(SOUNDS_DIR)):
                 p_dir = os.path.join(SOUNDS_DIR, item)
@@ -489,7 +544,7 @@ class RetroHDDClickerApp(QApplication):
         self.menu = QMenu()
         
         self.act_enable = QAction("Enable HDD Click Sound", self.menu, checkable=True)
-        self.act_enable.setChecked(True)
+        self.act_enable.setChecked(self.monitor.enabled)
         self.act_enable.triggered.connect(self.toggle_enable)
         self.menu.addAction(self.act_enable)
         self.menu.addSeparator()
@@ -558,7 +613,7 @@ class RetroHDDClickerApp(QApplication):
             act = QAction(label, self.sens_menu, checkable=True)
             if ms == self.monitor.poll_interval_ms:
                 act.setChecked(True)
-            act.triggered.connect(lambda checked, m=ms: self.monitor.set_interval(m))
+            act.triggered.connect(lambda checked, m=ms: self.set_interval_and_save(m))
             sens_group.addAction(act)
             self.sens_menu.addAction(act)
             
@@ -566,11 +621,11 @@ class RetroHDDClickerApp(QApplication):
         eng_group = QActionGroup(self)
         eng_qt = QAction("PyQt6 QtMultimedia (Multi-Voice Pool)", self.engine_menu, checkable=True)
         eng_qt.setChecked(self.audio_ctrl.engine == "qt")
-        eng_qt.triggered.connect(lambda: setattr(self.audio_ctrl, "engine", "qt"))
+        eng_qt.triggered.connect(lambda: self.audio_ctrl.set_engine("qt"))
         
         eng_pa = QAction("PulseAudio / PipeWire (paplay)", self.engine_menu, checkable=True)
         eng_pa.setChecked(self.audio_ctrl.engine == "paplay")
-        eng_pa.triggered.connect(lambda: setattr(self.audio_ctrl, "engine", "paplay"))
+        eng_pa.triggered.connect(lambda: self.audio_ctrl.set_engine("paplay"))
         
         eng_group.addAction(eng_qt)
         eng_group.addAction(eng_pa)
@@ -595,12 +650,17 @@ class RetroHDDClickerApp(QApplication):
         
         self.tray_icon.setContextMenu(self.menu)
 
+    def set_interval_and_save(self, ms):
+        self.monitor.set_interval(ms)
+        self.save_config()
+
     def on_profile_selected(self, profile_key):
         self.audio_ctrl.load_profile(profile_key)
         if profile_key in self.profile_actions:
             self.profile_actions[profile_key].setChecked(True)
         if self.settings_dlg and self.settings_dlg.isVisible():
             self.settings_dlg.populate_list()
+        self.save_config()
 
     def update_drives_menu(self):
         self.drives_menu.clear()
@@ -619,10 +679,12 @@ class RetroHDDClickerApp(QApplication):
             self.monitor.monitored_drives.add(dev)
         else:
             self.monitor.monitored_drives.discard(dev)
+        self.save_config()
 
     def refresh_drives(self):
         self.available_drives = self.discover_drives()
         self.update_drives_menu()
+        self.save_config()
 
     def toggle_enable(self, checked):
         self.monitor.enabled = checked
@@ -632,6 +694,7 @@ class RetroHDDClickerApp(QApplication):
         else:
             self.tray_icon.setIcon(self.icon_disabled)
             self.tray_icon.setToolTip("Retro 90s HDD Clicker (Disabled)")
+        self.save_config()
 
     def on_activity(self, sound_type, delta_magnitude):
         if not self.monitor.enabled:
