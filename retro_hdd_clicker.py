@@ -102,11 +102,13 @@ class BlockDeviceMonitor(QObject):
 
 
 class AudioController:
-    def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt", on_change_cb=None):
+    def __init__(self, profiles_dict, initial_profile="caviar", volume=0.8, engine="qt", min_gap_ms=125, on_change_cb=None):
         self.profiles = profiles_dict
         self.profile = initial_profile
         self.volume = volume
         self.engine = engine
+        self.min_gap_ms = min_gap_ms
+        self.last_play_time = 0.0
         self.on_change_cb = on_change_cb
         self.loaded_pools = {}
         self.current_wav_list = []
@@ -145,7 +147,17 @@ class AudioController:
         if self.on_change_cb:
             self.on_change_cb()
 
+    def set_min_gap(self, gap_ms):
+        self.min_gap_ms = max(0, int(gap_ms))
+        if self.on_change_cb:
+            self.on_change_cb()
+
     def play(self, sound_type="any"):
+        now = time.time()
+        if self.min_gap_ms > 0 and (now - self.last_play_time) < (self.min_gap_ms / 1000.0):
+            return
+        self.last_play_time = now
+
         target_wav = None
         
         if self.profile == "random_drive":
@@ -277,26 +289,44 @@ class SettingsDialog(QDialog):
         
         main_layout.addWidget(sound_box, 1)
         
-        # Volume & Backend Box
-        ctrl_box = QGroupBox("Audio Settings & Engine")
-        ctrl_layout = QHBoxLayout(ctrl_box)
+        # Volume, Backend & Throttling Box
+        ctrl_box = QGroupBox("Audio Settings & Throttling")
+        ctrl_layout = QVBoxLayout(ctrl_box)
         
-        ctrl_layout.addWidget(QLabel("Volume:"))
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Volume:"))
         self.slider_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_vol.setRange(0, 100)
         self.slider_vol.setValue(int(self.audio_ctrl.volume * 100))
         self.slider_vol.valueChanged.connect(self.on_volume_changed)
-        ctrl_layout.addWidget(self.slider_vol, 1)
+        row1.addWidget(self.slider_vol, 1)
         self.lbl_vol_val = QLabel(f"{int(self.audio_ctrl.volume * 100)}%")
-        ctrl_layout.addWidget(self.lbl_vol_val)
+        row1.addWidget(self.lbl_vol_val)
         
-        ctrl_layout.addSpacing(15)
-        ctrl_layout.addWidget(QLabel("Backend:"))
+        row1.addSpacing(15)
+        row1.addWidget(QLabel("Backend:"))
         self.combo_engine = QComboBox()
         self.combo_engine.addItems(["PyQt6 QtMultimedia (Multi-Voice)", "PulseAudio / PipeWire (paplay)"])
         self.combo_engine.setCurrentIndex(0 if self.audio_ctrl.engine == "qt" else 1)
         self.combo_engine.currentIndexChanged.connect(self.on_engine_changed)
-        ctrl_layout.addWidget(self.combo_engine)
+        row1.addWidget(self.combo_engine)
+        ctrl_layout.addLayout(row1)
+        
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Click Rate Limit (Throttling):"))
+        self.combo_gap = QComboBox()
+        self.combo_gap.addItems([
+            "Uncapped / Raw (0ms gap - can sound like Geiger counter)",
+            "High Rate (65ms gap - max ~15 clicks/sec)",
+            "Authentic Mechanical Seek (125ms gap - max ~8 clicks/sec - Default)",
+            "Relaxed (250ms gap - max ~4 clicks/sec)",
+            "Minimal / Quiet (500ms gap - max ~2 clicks/sec)"
+        ])
+        gap_map = {0: 0, 65: 1, 125: 2, 250: 3, 500: 4}
+        self.combo_gap.setCurrentIndex(gap_map.get(self.audio_ctrl.min_gap_ms, 2))
+        self.combo_gap.currentIndexChanged.connect(self.on_gap_changed)
+        row2.addWidget(self.combo_gap, 1)
+        ctrl_layout.addLayout(row2)
         
         main_layout.addWidget(ctrl_box)
         
@@ -396,6 +426,11 @@ class SettingsDialog(QDialog):
     def on_engine_changed(self, idx):
         self.audio_ctrl.set_engine("qt" if idx == 0 else "paplay")
 
+    def on_gap_changed(self, idx):
+        gaps = [0, 65, 125, 250, 500]
+        if 0 <= idx < len(gaps):
+            self.audio_ctrl.set_min_gap(gaps[idx])
+
     def update_stats(self):
         self.lbl_clicks.setText(f"Total Clicks Triggered: {self.monitor.total_clicks:,}")
         mb_read = (self.monitor.total_sectors_read * 512) / (1024 * 1024)
@@ -431,12 +466,14 @@ class RetroHDDClickerApp(QApplication):
             
         vol = self.config.get("volume", 0.8)
         eng = self.config.get("engine", "qt")
+        gap = self.config.get("min_gap_ms", 125)
         
         self.audio_ctrl = AudioController(
             self.profiles,
             initial_profile=initial_prof,
             volume=vol,
             engine=eng,
+            min_gap_ms=gap,
             on_change_cb=self.save_config
         )
         
@@ -476,6 +513,7 @@ class RetroHDDClickerApp(QApplication):
                 "profile": self.audio_ctrl.profile,
                 "volume": self.audio_ctrl.volume,
                 "engine": self.audio_ctrl.engine,
+                "min_gap_ms": self.audio_ctrl.min_gap_ms,
                 "poll_interval_ms": self.monitor.poll_interval_ms,
                 "enabled": self.monitor.enabled,
                 "monitored_drives": list(self.monitor.monitored_drives)
@@ -618,6 +656,23 @@ class RetroHDDClickerApp(QApplication):
             sens_group.addAction(act)
             self.sens_menu.addAction(act)
             
+        self.rate_menu = self.menu.addMenu("Max Rate Limit (Click Cooldown)")
+        rate_group = QActionGroup(self)
+        rate_options = [
+            (0, "Uncapped / Raw (0ms gap - can buzz like Geiger counter)"),
+            (65, "High Rate (~15 clicks/sec - 65ms gap)"),
+            (125, "Authentic Mechanical (~8 clicks/sec - 125ms gap - Default)"),
+            (250, "Relaxed (~4 clicks/sec - 250ms gap)"),
+            (500, "Minimal / Quiet (~2 clicks/sec - 500ms gap)")
+        ]
+        for ms, label in rate_options:
+            act = QAction(label, self.rate_menu, checkable=True)
+            if ms == self.audio_ctrl.min_gap_ms:
+                act.setChecked(True)
+            act.triggered.connect(lambda checked, m=ms: self.set_min_gap_and_save(m))
+            rate_group.addAction(act)
+            self.rate_menu.addAction(act)
+            
         self.engine_menu = self.menu.addMenu("Audio Backend")
         eng_group = QActionGroup(self)
         eng_qt = QAction("PyQt6 QtMultimedia (Multi-Voice Pool)", self.engine_menu, checkable=True)
@@ -653,6 +708,10 @@ class RetroHDDClickerApp(QApplication):
 
     def set_interval_and_save(self, ms):
         self.monitor.set_interval(ms)
+        self.save_config()
+
+    def set_min_gap_and_save(self, ms):
+        self.audio_ctrl.set_min_gap(ms)
         self.save_config()
 
     def on_profile_selected(self, profile_key):

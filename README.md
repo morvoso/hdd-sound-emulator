@@ -13,9 +13,12 @@ A background utility and system tray application for Linux that plays mechanical
 - **Randomized WAV Selection**:
   - When disk activity is detected, the audio engine randomly selects one of the WAV files in the active folder (`load.wav`, `load2.wav`, `looping.wav`, `load3.wav`).
   - **Random Drive on Every Click mode**: An optional mode that randomly picks both a drive profile and a WAV file for each click event.
+- **Click Rate Limiting (Acoustic Cooldown)**:
+  - Automatically throttles audio playback during heavy sequential SSD reads or compiles to prevent rapid-fire "Geiger counter" buzzing.
+  - Configurable cooldown gaps (Uncapped 0ms, High Rate 65ms, Authentic Mechanical 125ms default, Relaxed 250ms, or Quiet 500ms).
 - **System Tray Menu & Dashboard**:
   - **Submenus**: Right-click the system tray icon to select sound profiles sorted by era (1980s, 1990s, 2000s+, Floppy Drives & CD-ROM).
-  - **Sound Dashboard**: Double-click the tray icon to open the settings dialog to filter profiles, preview audio samples, adjust volume, and change the polling rate.
+  - **Sound Dashboard**: Double-click the tray icon to open the settings dialog to filter profiles, preview audio samples, adjust volume, change the polling rate, and set click rate limits.
   - **Activity Indicator**: The system tray icon shows a red LED indicator during disk activity.
 
 ---
