@@ -124,7 +124,7 @@ class AudioController:
             self.current_wav_list = wav_files
             for wav_path in wav_files:
                 pool = []
-                for _ in range(2):
+                for _ in range(1):
                     fx = QSoundEffect()
                     fx.setSource(QUrl.fromLocalFile(wav_path))
                     fx.setVolume(self.volume)
@@ -148,15 +148,21 @@ class AudioController:
             self.on_change_cb()
 
     def set_min_gap(self, gap_ms):
-        self.min_gap_ms = max(0, int(gap_ms))
+        self.min_gap_ms = int(gap_ms)
         if self.on_change_cb:
             self.on_change_cb()
 
     def play(self, sound_type="any"):
-        now = time.time()
-        if self.min_gap_ms > 0 and (now - self.last_play_time) < (self.min_gap_ms / 1000.0):
-            return
-        self.last_play_time = now
+        if self.min_gap_ms < 0:
+            for pool in self.loaded_pools.values():
+                for fx in pool:
+                    if fx.isPlaying():
+                        return
+        else:
+            now = time.time()
+            if self.min_gap_ms > 0 and (now - self.last_play_time) < (self.min_gap_ms / 1000.0):
+                return
+            self.last_play_time = now
 
         target_wav = None
         
@@ -199,16 +205,11 @@ class AudioController:
                 self.loaded_pools[target_wav] = [fx]
                 return
 
-            played = False
             for fx in pool:
                 if not fx.isPlaying():
                     fx.setVolume(self.volume)
                     fx.play()
-                    played = True
                     break
-            if not played and pool:
-                pool[0].setVolume(self.volume)
-                pool[0].play()
 
 
 class SettingsDialog(QDialog):
@@ -313,17 +314,17 @@ class SettingsDialog(QDialog):
         ctrl_layout.addLayout(row1)
         
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Click Rate Limit (Throttling):"))
+        row2.addWidget(QLabel("Playback Mode & Rate Limit:"))
         self.combo_gap = QComboBox()
         self.combo_gap.addItems([
-            "Uncapped / Raw (0ms gap - can sound like Geiger counter)",
-            "High Rate (65ms gap - max ~15 clicks/sec)",
-            "Authentic Mechanical Seek (125ms gap - max ~8 clicks/sec - Default)",
-            "Relaxed (250ms gap - max ~4 clicks/sec)",
-            "Minimal / Quiet (500ms gap - max ~2 clicks/sec)"
+            "Exclusive / Clean Playback (-1ms - Plays seek sequence without overlap - Default)",
+            "Authentic Mechanical Cooldown (125ms gap - max ~8 clicks/sec)",
+            "High Rate Cooldown (65ms gap - max ~15 clicks/sec)",
+            "Relaxed Cooldown (250ms gap - max ~4 clicks/sec)",
+            "Uncapped / Raw Overlap (0ms gap - can overlap & buzz)"
         ])
-        gap_map = {0: 0, 65: 1, 125: 2, 250: 3, 500: 4}
-        self.combo_gap.setCurrentIndex(gap_map.get(self.audio_ctrl.min_gap_ms, 2))
+        gap_map = {-1: 0, 125: 1, 65: 2, 250: 3, 0: 4}
+        self.combo_gap.setCurrentIndex(gap_map.get(self.audio_ctrl.min_gap_ms, 0))
         self.combo_gap.currentIndexChanged.connect(self.on_gap_changed)
         row2.addWidget(self.combo_gap, 1)
         ctrl_layout.addLayout(row2)
@@ -427,7 +428,7 @@ class SettingsDialog(QDialog):
         self.audio_ctrl.set_engine("qt" if idx == 0 else "paplay")
 
     def on_gap_changed(self, idx):
-        gaps = [0, 65, 125, 250, 500]
+        gaps = [-1, 125, 65, 250, 0]
         if 0 <= idx < len(gaps):
             self.audio_ctrl.set_min_gap(gaps[idx])
 
@@ -466,7 +467,7 @@ class RetroHDDClickerApp(QApplication):
             
         vol = self.config.get("volume", 0.8)
         eng = self.config.get("engine", "qt")
-        gap = self.config.get("min_gap_ms", 125)
+        gap = self.config.get("min_gap_ms", -1)
         
         self.audio_ctrl = AudioController(
             self.profiles,
@@ -529,7 +530,10 @@ class RetroHDDClickerApp(QApplication):
             for item in sorted(os.listdir(SOUNDS_DIR)):
                 p_dir = os.path.join(SOUNDS_DIR, item)
                 if os.path.isdir(p_dir):
-                    wavs = [os.path.join(p_dir, f) for f in sorted(os.listdir(p_dir)) if f.lower().endswith(".wav")]
+                    all_wavs = [os.path.join(p_dir, f) for f in sorted(os.listdir(p_dir)) if f.lower().endswith(".wav")]
+                    wavs = [w for w in all_wavs if not any(k in os.path.basename(w).lower() for k in ["loop", "idle", "ambience", "spin", "motor"])]
+                    if not wavs:
+                        wavs = all_wavs
                     if wavs:
                         names_map = {
                             "caviar": "Western Digital Caviar (1995)",
@@ -549,7 +553,10 @@ class RetroHDDClickerApp(QApplication):
             for item in sorted(os.listdir(HDD_SOUNDS_DIR)):
                 p_dir = os.path.join(HDD_SOUNDS_DIR, item)
                 if os.path.isdir(p_dir):
-                    wavs = [os.path.join(p_dir, f) for f in sorted(os.listdir(p_dir)) if f.lower().endswith(".wav")]
+                    all_wavs = [os.path.join(p_dir, f) for f in sorted(os.listdir(p_dir)) if f.lower().endswith(".wav")]
+                    wavs = [w for w in all_wavs if not any(k in os.path.basename(w).lower() for k in ["loop", "idle", "ambience", "spin", "motor"])]
+                    if not wavs:
+                        wavs = all_wavs
                     if wavs:
                         if item.startswith("198") or item.lower().startswith("random 80"):
                             cat = "1980s"
@@ -656,14 +663,14 @@ class RetroHDDClickerApp(QApplication):
             sens_group.addAction(act)
             self.sens_menu.addAction(act)
             
-        self.rate_menu = self.menu.addMenu("Max Rate Limit (Click Cooldown)")
+        self.rate_menu = self.menu.addMenu("Playback Mode & Rate Limit")
         rate_group = QActionGroup(self)
         rate_options = [
-            (0, "Uncapped / Raw (0ms gap - can buzz like Geiger counter)"),
-            (65, "High Rate (~15 clicks/sec - 65ms gap)"),
-            (125, "Authentic Mechanical (~8 clicks/sec - 125ms gap - Default)"),
-            (250, "Relaxed (~4 clicks/sec - 250ms gap)"),
-            (500, "Minimal / Quiet (~2 clicks/sec - 500ms gap)")
+            (-1, "Exclusive / Clean Playback (No Overlap - Plays seek sequence cleanly - Default)"),
+            (125, "Authentic Mechanical Cooldown (125ms gap - ~8 clicks/sec)"),
+            (65, "High Rate Cooldown (65ms gap - ~15 clicks/sec)"),
+            (250, "Relaxed Cooldown (250ms gap - ~4 clicks/sec)"),
+            (0, "Uncapped / Raw Overlap (0ms gap - can overlap & buzz)")
         ]
         for ms, label in rate_options:
             act = QAction(label, self.rate_menu, checkable=True)

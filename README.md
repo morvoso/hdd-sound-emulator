@@ -10,12 +10,13 @@ A background utility and system tray application for Linux that plays mechanical
 - **Sound Libraries (hdd-sounds/)**:
   - Automatically discovers sample folders curated by Deervo's DiskClick (including sounds from models like the Seagate ST-225, Western Digital Caviar 140, Quantum Fireball 540AT, IBM Deskstar 75GXP, and 3.5" or 5.25" floppy drives).
   - Includes 4 synthesized seek sound profiles (Caviar, Fireball, Deskstar, Medalist).
-- **Randomized WAV Selection**:
-  - When disk activity is detected, the audio engine randomly selects one of the WAV files in the active folder (`load.wav`, `load2.wav`, `looping.wav`, `load3.wav`).
-  - **Random Drive on Every Click mode**: An optional mode that randomly picks both a drive profile and a WAV file for each click event.
-- **Click Rate Limiting (Acoustic Cooldown)**:
-  - Automatically throttles audio playback during heavy sequential SSD reads or compiles to prevent rapid-fire "Geiger counter" buzzing.
-  - Configurable cooldown gaps (Uncapped 0ms, High Rate 65ms, Authentic Mechanical 125ms default, Relaxed 250ms, or Quiet 500ms).
+- **Randomized WAV Selection & Ambient Filtering**:
+  - When disk activity is detected, the audio engine randomly selects from the active folder's seek/load samples (`load.wav`, `load2.wav`, `load3.wav`).
+  - Automatically filters out continuous ambient idle loops (`looping.wav`, `motor.wav`) from the seek click pool to prevent muddy background overlapping.
+  - **Random Drive on Every Click mode**: An optional mode that randomly picks both a drive profile and a seek WAV file for each click event.
+- **Exclusive / Clean Playback & Click Rate Limiting**:
+  - **Exclusive Playback Mode (Default)**: Plays authentic 3-to-6-second seek sequences cleanly to completion without overlapping, echoing, or mid-way stutter restarts.
+  - **Configurable Throttling**: Optional cooldown gaps available from the dashboard or tray menu (Exclusive -1ms default, Authentic Mechanical 125ms, High Rate 65ms, Relaxed 250ms, or Uncapped 0ms).
 - **System Tray Menu & Dashboard**:
   - **Submenus**: Right-click the system tray icon to select sound profiles sorted by era (1980s, 1990s, 2000s+, Floppy Drives & CD-ROM).
   - **Sound Dashboard**: Double-click the tray icon to open the settings dialog to filter profiles, preview audio samples, adjust volume, change the polling rate, and set click rate limits.
